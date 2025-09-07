@@ -1,12 +1,25 @@
+# Streamlit Core
 streamlit
-opencv-python-headless
-opencv-contrib-python-headless
-numpy
-pandas
 streamlit-webrtc
+
+# Computer Vision & AI
+opencv-python-headless
 ultralytics
 mediapipe
-requests
-python-dotenv
+
+# Image Processing
 pillow
+numpy
 av
+
+# Data Handling
+pandas
+
+# Web & API
+requests
+
+# Environment
+python-dotenv
+
+# Date/Time
+python-dateutil
