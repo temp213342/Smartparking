@@ -5,26 +5,22 @@ import json
 import uuid
 from typing import Dict, List, Optional
 import base64
+import cv2
 import numpy as np
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
+import av
 import threading
 import time as time_module
 import random
 
-# Try importing computer vision libraries with error handling
+# Import backend modules (create these if they don't exist)
 try:
-    import cv2
-    CV2_AVAILABLE = True
+    from parking_manager import parking_manager, SlotStatus
+    from detection_engine import detection_engine
+    BACKEND_AVAILABLE = True
 except ImportError:
-    CV2_AVAILABLE = False
-    st.warning("OpenCV not available. Some features will be disabled.")
-
-try:
-    from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
-    import av
-    WEBRTC_AVAILABLE = True
-except ImportError:
-    WEBRTC_AVAILABLE = False
-    st.warning("WebRTC not available. Camera features will be disabled.")
+    BACKEND_AVAILABLE = False
+    st.warning("Backend modules not found. Using simulation mode.")
 
 # Page configuration
 st.set_page_config(
@@ -48,27 +44,6 @@ class GlobalState:
 global_state = GlobalState()
 
 # Sample parking data for simulation
-class ParkingSlot:
-    def __init__(self, slot_id):
-        self.slot_id = slot_id
-        self.status = 'available'
-        self.vehicle_type = None
-        self.vehicle_number = None
-        self.customer_name = None
-        self.arrival_time = None
-        self.expected_pickup = None
-        
-    def to_dict(self):
-        return {
-            'slot_id': self.slot_id,
-            'status': self.status,
-            'vehicle_type': self.vehicle_type,
-            'vehicle_number': self.vehicle_number,
-            'customer_name': self.customer_name,
-            'arrival_time': self.arrival_time,
-            'expected_pickup': self.expected_pickup
-        }
-
 class SimulatedParkingManager:
     def __init__(self):
         self.slots = {}
@@ -79,7 +54,14 @@ class SimulatedParkingManager:
     def initialize_sample_data(self):
         # Initialize 20 slots
         for i in range(1, 21):
-            self.slots[f"slot_{i}"] = ParkingSlot(f"slot_{i}")
+            self.slots[f"slot_{i}"] = {
+                'status': 'available',
+                'vehicle_type': None,
+                'vehicle_number': None,
+                'customer_name': None,
+                'arrival_time': None,
+                'expected_pickup': None
+            }
         
         # Add some sample occupied slots
         sample_data = [
@@ -91,17 +73,18 @@ class SimulatedParkingManager:
         
         for data in sample_data:
             slot_id = f"slot_{data['slot']}"
-            slot = self.slots[slot_id]
-            slot.status = data['status']
-            slot.vehicle_type = data['vehicle_type']
-            slot.vehicle_number = data['vehicle_number']
-            slot.customer_name = data['customer_name']
-            slot.arrival_time = datetime.now() - timedelta(hours=random.randint(1, 5))
+            self.slots[slot_id].update({
+                'status': data['status'],
+                'vehicle_type': data['vehicle_type'],
+                'vehicle_number': data['vehicle_number'],
+                'customer_name': data['customer_name'],
+                'arrival_time': datetime.now() - timedelta(hours=random.randint(1, 5))
+            })
     
     def get_statistics(self):
-        available = sum(1 for slot in self.slots.values() if slot.status == 'available')
-        occupied = sum(1 for slot in self.slots.values() if slot.status == 'occupied')
-        reserved = sum(1 for slot in self.slots.values() if slot.status == 'reserved')
+        available = sum(1 for slot in self.slots.values() if slot['status'] == 'available')
+        occupied = sum(1 for slot in self.slots.values() if slot['status'] == 'occupied')
+        reserved = sum(1 for slot in self.slots.values() if slot['status'] == 'reserved')
         
         return {
             'total_slots': 20,
@@ -114,39 +97,40 @@ class SimulatedParkingManager:
         }
     
     def get_available_slots(self):
-        return [slot_id for slot_id, slot in self.slots.items() if slot.status == 'available']
+        return [slot_id for slot_id, data in self.slots.items() if data['status'] == 'available']
     
     def get_occupied_slots(self):
-        return [slot_id for slot_id, slot in self.slots.items() if slot.status == 'occupied']
+        return [slot_id for slot_id, data in self.slots.items() if data['status'] == 'occupied']
     
     def park_vehicle(self, slot_id, vehicle_type, vehicle_number, customer_name, arrival_dt, pickup_dt):
-        if slot_id in self.slots and self.slots[slot_id].status == 'available':
-            slot = self.slots[slot_id]
-            slot.status = 'occupied'
-            slot.vehicle_type = vehicle_type
-            slot.vehicle_number = vehicle_number
-            slot.customer_name = customer_name
-            slot.arrival_time = arrival_dt
-            slot.expected_pickup = pickup_dt
+        if slot_id in self.slots and self.slots[slot_id]['status'] == 'available':
+            self.slots[slot_id].update({
+                'status': 'occupied',
+                'vehicle_type': vehicle_type,
+                'vehicle_number': vehicle_number,
+                'customer_name': customer_name,
+                'arrival_time': arrival_dt,
+                'expected_pickup': pickup_dt
+            })
             return True
         return False
     
     def remove_vehicle(self, slot_id, departure_dt):
-        if slot_id in self.slots and self.slots[slot_id].status == 'occupied':
-            slot = self.slots[slot_id]
+        if slot_id in self.slots and self.slots[slot_id]['status'] == 'occupied':
+            slot_data = self.slots[slot_id]
             
             # Calculate bill
-            duration = (departure_dt - slot.arrival_time).total_seconds() / 3600
+            duration = (departure_dt - slot_data['arrival_time']).total_seconds() / 3600
             base_rates = {'Car': 150, 'Bike': 200, 'Truck': 300}
-            rate = base_rates.get(slot.vehicle_type, 150)
+            rate = base_rates.get(slot_data['vehicle_type'], 150)
             total_cost = duration * rate
             
             bill_info = {
                 'id': f"TXN{len(self.transactions) + 1:04d}",
-                'vehicle_number': slot.vehicle_number,
-                'vehicle_type': slot.vehicle_type,
-                'customer_name': slot.customer_name,
-                'arrival_time': slot.arrival_time,
+                'vehicle_number': slot_data['vehicle_number'],
+                'vehicle_type': slot_data['vehicle_type'],
+                'customer_name': slot_data['customer_name'],
+                'arrival_time': slot_data['arrival_time'],
                 'departure_time': departure_dt,
                 'duration_hours': duration,
                 'regular_hours': duration,
@@ -163,31 +147,39 @@ class SimulatedParkingManager:
             self.revenue += total_cost
             
             # Reset slot
-            slot.status = 'available'
-            slot.vehicle_type = None
-            slot.vehicle_number = None
-            slot.customer_name = None
-            slot.arrival_time = None
-            slot.expected_pickup = None
+            self.slots[slot_id] = {
+                'status': 'available',
+                'vehicle_type': None,
+                'vehicle_number': None,
+                'customer_name': None,
+                'arrival_time': None,
+                'expected_pickup': None
+            }
             
             return bill_info
         return None
     
     def get_slot_data(self, slot_id):
-        return self.slots.get(slot_id, ParkingSlot(slot_id))
+        return self.slots.get(slot_id, {})
     
     def search_vehicle(self, vehicle_number):
         results = []
-        for slot_id, slot in self.slots.items():
-            if slot.vehicle_number and vehicle_number.upper() in slot.vehicle_number.upper():
-                results.append((slot_id, slot))
+        for slot_id, data in self.slots.items():
+            if data['vehicle_number'] and vehicle_number.upper() in data['vehicle_number'].upper():
+                results.append((slot_id, data))
         return results
     
     def get_recent_transactions(self, limit=10):
         return self.transactions[-limit:] if self.transactions else []
 
 # Initialize parking manager
-parking_mgr = SimulatedParkingManager()
+if BACKEND_AVAILABLE:
+    try:
+        parking_mgr = parking_manager
+    except:
+        parking_mgr = SimulatedParkingManager()
+else:
+    parking_mgr = SimulatedParkingManager()
 
 # Custom CSS
 def load_css():
@@ -474,9 +466,6 @@ class AutoDetectionProcessor(VideoProcessorBase):
         self.ok_gesture_counter = 0
         
     def recv(self, frame):
-        if not CV2_AVAILABLE:
-            return frame
-            
         img = frame.to_ndarray(format="bgr24")
         
         # Use global state instead of st.session_state
@@ -486,11 +475,10 @@ class AutoDetectionProcessor(VideoProcessorBase):
         current_time = time_module.time()
         
         # Add detection overlay text
-        if CV2_AVAILABLE:
-            cv2.putText(img, 'AI Detection Active', (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            cv2.putText(img, f'Phase: {global_state.detection_phase}', (10, 70), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+        cv2.putText(img, 'AI Detection Active', (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.putText(img, f'Phase: {global_state.detection_phase}', (10, 70), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
         
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
@@ -532,7 +520,7 @@ def render_parking_grid():
         col_idx = i % 4
         
         with cols[col_idx]:
-            status = slot_data.status
+            status = slot_data.get('status', 'available')
             slot_number = i + 1
             
             if status == 'available':
@@ -540,11 +528,11 @@ def render_parking_grid():
                 info_text = 'Available'
             elif status == 'occupied':
                 css_class = 'slot-occupied'
-                vehicle_info = f"{slot_data.vehicle_type or 'Vehicle'}"
-                info_text = f"{vehicle_info}<br>{slot_data.vehicle_number or 'N/A'}"
+                vehicle_info = f"{slot_data.get('vehicle_type', 'Vehicle')}"
+                info_text = f"{vehicle_info}<br>{slot_data.get('vehicle_number', 'N/A')}"
             else:  # reserved
                 css_class = 'slot-reserved'
-                info_text = f"Reserved<br>{slot_data.vehicle_number or 'N/A'}"
+                info_text = f"Reserved<br>{slot_data.get('vehicle_number', 'N/A')}"
             
             st.markdown(f"""
             <div class="parking-slot {css_class}">
@@ -638,7 +626,7 @@ def render_auto_mode_fallback():
     # Check if we should use simulation mode
     use_simulation = st.session_state.get('simulation_mode', True)
     
-    if use_simulation or not WEBRTC_AVAILABLE:
+    if use_simulation:
         st.info("📱 **Demo Mode**: Camera detection simulated for cloud deployment. Full AI detection available in local deployment.")
         
         col1, col2 = st.columns([1, 1])
@@ -716,7 +704,7 @@ def render_auto_mode_fallback():
                 st.rerun()
         
         # Video Stream with improved configuration
-        if st.session_state.auto_mode_active and WEBRTC_AVAILABLE:
+        if st.session_state.auto_mode_active:
             try:
                 webrtc_ctx = webrtc_streamer(
                     key="auto-detection",
@@ -945,11 +933,11 @@ def main():
                         
                         with col_b:
                             st.markdown("**Vehicle Information:**")
-                            st.write(f"Vehicle: {slot_info.vehicle_type or 'N/A'}")
-                            st.write(f"Number: {slot_info.vehicle_number or 'N/A'}")
-                            st.write(f"Customer: {slot_info.customer_name or 'N/A'}")
-                            if slot_info.arrival_time:
-                                st.write(f"Arrival: {slot_info.arrival_time.strftime('%Y-%m-%d %H:%M')}")
+                            st.write(f"Vehicle: {slot_info.get('vehicle_type', 'N/A')}")
+                            st.write(f"Number: {slot_info.get('vehicle_number', 'N/A')}")
+                            st.write(f"Customer: {slot_info.get('customer_name', 'N/A')}")
+                            if slot_info.get('arrival_time'):
+                                st.write(f"Arrival: {slot_info['arrival_time'].strftime('%Y-%m-%d %H:%M')}")
                     
                     submitted = st.form_submit_button("🚪 Generate Bill & Remove")
                     
@@ -1039,7 +1027,7 @@ def main():
             if found_slots:
                 for slot_id, slot_data in found_slots:
                     slot_num = slot_id.split('_')[1]
-                    st.success(f"Found in Slot {slot_num}: {slot_data.vehicle_number} ({slot_data.status})")
+                    st.success(f"Found in Slot {slot_num}: {slot_data.get('vehicle_number')} ({slot_data.get('status')})")
             else:
                 if len(search_query) > 2:
                     st.warning("Vehicle not found.")
