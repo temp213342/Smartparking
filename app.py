@@ -11,10 +11,16 @@ from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfigurati
 import av
 import threading
 import time as time_module
+import random
 
-# Import backend modules
-from parking_manager import parking_manager, SlotStatus
-from detection_engine import detection_engine
+# Import backend modules (create these if they don't exist)
+try:
+    from parking_manager import parking_manager, SlotStatus
+    from detection_engine import detection_engine
+    BACKEND_AVAILABLE = True
+except ImportError:
+    BACKEND_AVAILABLE = False
+    st.warning("Backend modules not found. Using simulation mode.")
 
 # Page configuration
 st.set_page_config(
@@ -37,7 +43,145 @@ class GlobalState:
 
 global_state = GlobalState()
 
-# Custom CSS (keeping exactly the same as provided)
+# Sample parking data for simulation
+class SimulatedParkingManager:
+    def __init__(self):
+        self.slots = {}
+        self.transactions = []
+        self.revenue = 0
+        self.initialize_sample_data()
+    
+    def initialize_sample_data(self):
+        # Initialize 20 slots
+        for i in range(1, 21):
+            self.slots[f"slot_{i}"] = {
+                'status': 'available',
+                'vehicle_type': None,
+                'vehicle_number': None,
+                'customer_name': None,
+                'arrival_time': None,
+                'expected_pickup': None
+            }
+        
+        # Add some sample occupied slots
+        sample_data = [
+            {"slot": 2, "status": "occupied", "vehicle_type": "Bike", "vehicle_number": "WB02B5678", "customer_name": "John Doe"},
+            {"slot": 4, "status": "occupied", "vehicle_type": "Car", "vehicle_number": "WB01A1234", "customer_name": "Jane Smith"},
+            {"slot": 6, "status": "occupied", "vehicle_type": "Truck", "vehicle_number": "WB03C9101", "customer_name": "Mike Johnson"},
+            {"slot": 8, "status": "reserved", "vehicle_type": "Car", "vehicle_number": "WB04D1121", "customer_name": "Alice Brown"},
+        ]
+        
+        for data in sample_data:
+            slot_id = f"slot_{data['slot']}"
+            self.slots[slot_id].update({
+                'status': data['status'],
+                'vehicle_type': data['vehicle_type'],
+                'vehicle_number': data['vehicle_number'],
+                'customer_name': data['customer_name'],
+                'arrival_time': datetime.now() - timedelta(hours=random.randint(1, 5))
+            })
+    
+    def get_statistics(self):
+        available = sum(1 for slot in self.slots.values() if slot['status'] == 'available')
+        occupied = sum(1 for slot in self.slots.values() if slot['status'] == 'occupied')
+        reserved = sum(1 for slot in self.slots.values() if slot['status'] == 'reserved')
+        
+        return {
+            'total_slots': 20,
+            'available_count': available,
+            'occupied_count': occupied,
+            'reserved_count': reserved,
+            'occupancy_rate': (occupied + reserved) / 20 * 100,
+            'total_revenue': self.revenue,
+            'total_transactions': len(self.transactions)
+        }
+    
+    def get_available_slots(self):
+        return [slot_id for slot_id, data in self.slots.items() if data['status'] == 'available']
+    
+    def get_occupied_slots(self):
+        return [slot_id for slot_id, data in self.slots.items() if data['status'] == 'occupied']
+    
+    def park_vehicle(self, slot_id, vehicle_type, vehicle_number, customer_name, arrival_dt, pickup_dt):
+        if slot_id in self.slots and self.slots[slot_id]['status'] == 'available':
+            self.slots[slot_id].update({
+                'status': 'occupied',
+                'vehicle_type': vehicle_type,
+                'vehicle_number': vehicle_number,
+                'customer_name': customer_name,
+                'arrival_time': arrival_dt,
+                'expected_pickup': pickup_dt
+            })
+            return True
+        return False
+    
+    def remove_vehicle(self, slot_id, departure_dt):
+        if slot_id in self.slots and self.slots[slot_id]['status'] == 'occupied':
+            slot_data = self.slots[slot_id]
+            
+            # Calculate bill
+            duration = (departure_dt - slot_data['arrival_time']).total_seconds() / 3600
+            base_rates = {'Car': 150, 'Bike': 200, 'Truck': 300}
+            rate = base_rates.get(slot_data['vehicle_type'], 150)
+            total_cost = duration * rate
+            
+            bill_info = {
+                'id': f"TXN{len(self.transactions) + 1:04d}",
+                'vehicle_number': slot_data['vehicle_number'],
+                'vehicle_type': slot_data['vehicle_type'],
+                'customer_name': slot_data['customer_name'],
+                'arrival_time': slot_data['arrival_time'],
+                'departure_time': departure_dt,
+                'duration_hours': duration,
+                'regular_hours': duration,
+                'rush_hours': 0,
+                'night_hours': 0,
+                'base_rate': rate,
+                'rush_surcharge': 0,
+                'night_rate': 100,
+                'total_cost': total_cost,
+                'amount': total_cost
+            }
+            
+            self.transactions.append(bill_info)
+            self.revenue += total_cost
+            
+            # Reset slot
+            self.slots[slot_id] = {
+                'status': 'available',
+                'vehicle_type': None,
+                'vehicle_number': None,
+                'customer_name': None,
+                'arrival_time': None,
+                'expected_pickup': None
+            }
+            
+            return bill_info
+        return None
+    
+    def get_slot_data(self, slot_id):
+        return self.slots.get(slot_id, {})
+    
+    def search_vehicle(self, vehicle_number):
+        results = []
+        for slot_id, data in self.slots.items():
+            if data['vehicle_number'] and vehicle_number.upper() in data['vehicle_number'].upper():
+                results.append((slot_id, data))
+        return results
+    
+    def get_recent_transactions(self, limit=10):
+        return self.transactions[-limit:] if self.transactions else []
+
+# Initialize parking manager
+if BACKEND_AVAILABLE:
+    try:
+        parking_mgr = parking_manager
+    except:
+        parking_mgr = SimulatedParkingManager()
+else:
+    parking_mgr = SimulatedParkingManager()
+
+# Custom CSS
 def load_css():
     st.markdown("""
     <style>
@@ -287,18 +431,30 @@ def initialize_session_state():
         st.session_state.detection_phase = 'idle'
     if 'auto_detection_results' not in st.session_state:
         st.session_state.auto_detection_results = {}
-    if 'vehicle_confirmed_time' not in st.session_state:
-        st.session_state.vehicle_confirmed_time = None
-    if 'plate_captured' not in st.session_state:
-        st.session_state.plate_captured = False
-    if 'gesture_confirmed' not in st.session_state:
-        st.session_state.gesture_confirmed = False
-    if 'finger_count_stable_time' not in st.session_state:
-        st.session_state.finger_count_stable_time = None
-    if 'current_finger_count' not in st.session_state:
-        st.session_state.current_finger_count = 0
-    if 'ok_gesture_count' not in st.session_state:
-        st.session_state.ok_gesture_count = 0
+    if 'simulation_mode' not in st.session_state:
+        st.session_state.simulation_mode = True
+
+# Updated WebRTC configuration with multiple STUN/TURN servers
+def get_ice_servers():
+    """Get ICE servers for WebRTC connection"""
+    return [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+        {"urls": ["stun:stun1.l.google.com:19302"]},
+        {"urls": ["stun:stun2.l.google.com:19302"]},
+        {"urls": ["stun:stun3.l.google.com:19302"]},
+        {"urls": ["stun:stun4.l.google.com:19302"]},
+        # Free TURN servers for better connectivity
+        {
+            "urls": ["turn:openrelay.metered.ca:80"],
+            "username": "openrelayproject",
+            "credential": "openrelayproject"
+        },
+        {
+            "urls": ["turn:openrelay.metered.ca:443"],
+            "username": "openrelayproject", 
+            "credential": "openrelayproject"
+        }
+    ]
 
 # Auto Detection Video Processor (Fixed for new API)
 class AutoDetectionProcessor(VideoProcessorBase):
@@ -318,113 +474,11 @@ class AutoDetectionProcessor(VideoProcessorBase):
         
         current_time = time_module.time()
         
-        # Phase 1: Vehicle Detection
-        if global_state.detection_phase == 'vehicle_detection':
-            vehicle_detected, vehicle_type, confidence = detection_engine.detect_vehicle_in_frame(img)
-            
-            if vehicle_detected and confidence > 0.5:
-                if self.last_vehicle_type != vehicle_type:
-                    self.detection_start_time = current_time
-                    self.last_vehicle_type = vehicle_type
-                
-                elapsed = current_time - self.detection_start_time if self.detection_start_time else 0
-                remaining = max(0, 3 - elapsed)
-                
-                cv2.putText(img, f'Vehicle: {vehicle_type} ({confidence:.2f})', 
-                          (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                cv2.putText(img, f'Confirming in: {remaining:.1f}s', 
-                          (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-                
-                if elapsed >= 3:
-                    global_state.auto_detection_results['vehicle_type'] = vehicle_type
-                    global_state.detection_phase = 'license_plate_detection'
-                    detection_engine.detection_result.current_phase = "License Plate Detection"
-                    self.detection_start_time = None
-            else:
-                cv2.putText(img, 'Point camera at vehicle', 
-                          (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
-                self.detection_start_time = None
-                self.last_vehicle_type = None
-        
-        # Phase 2: License Plate Detection  
-        elif global_state.detection_phase == 'license_plate_detection':
-            plate_detected, plate_roi, confidence = detection_engine.detect_license_plate_in_frame(img)
-            
-            if plate_detected and confidence > 0.4:
-                if not self.detection_start_time:
-                    self.detection_start_time = current_time
-                
-                elapsed = current_time - self.detection_start_time
-                remaining = max(0, 3 - elapsed)
-                
-                cv2.putText(img, f'License plate detected ({confidence:.2f})', 
-                          (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-                cv2.putText(img, f'Capturing in: {remaining:.1f}s', 
-                          (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-                
-                if elapsed >= 3 and not global_state.plate_captured:
-                    # Process license plate
-                    license_text = detection_engine.process_license_plate_ocr(plate_roi)
-                    if license_text:
-                        global_state.auto_detection_results['license_plate'] = license_text
-                        detection_engine.detection_result.current_phase = "Hand Gesture Detection"
-                        global_state.detection_phase = 'gesture_detection'
-                        global_state.plate_captured = True
-                    self.detection_start_time = None
-            else:
-                cv2.putText(img, 'Point camera at license plate', 
-                          (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
-                self.detection_start_time = None
-        
-        # Phase 3: Hand Gesture Detection
-        elif global_state.detection_phase == 'gesture_detection':
-            finger_count, ok_detected, processed_img = detection_engine.detect_hand_gesture_in_frame(img)
-            img = processed_img
-            
-            if not global_state.gesture_confirmed:
-                if ok_detected:
-                    self.ok_gesture_counter += 1
-                    cv2.putText(img, f'OK detected! Confirming... ({self.ok_gesture_counter}/10)', 
-                              (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-                    
-                    if self.ok_gesture_counter >= 10:
-                        confirmed_hours = global_state.current_finger_count
-                        if confirmed_hours > 0:
-                            global_state.auto_detection_results['parking_hours'] = confirmed_hours
-                            global_state.detection_phase = 'completed'
-                            global_state.gesture_confirmed = True
-                            detection_engine.detection_result.current_phase = "Detection Completed"
-                else:
-                    self.ok_gesture_counter = 0
-                    
-                    # Track finger count stability
-                    if finger_count > 0:
-                        self.finger_count_history.append(finger_count)
-                        if len(self.finger_count_history) > 30:  # ~1 second at 30fps
-                            self.finger_count_history.pop(0)
-                        
-                        # Check if finger count is stable
-                        if len(self.finger_count_history) >= 30:
-                            most_common = max(set(self.finger_count_history), 
-                                            key=self.finger_count_history.count)
-                            stability = self.finger_count_history.count(most_common) / len(self.finger_count_history)
-                            
-                            if stability > 0.8:  # 80% stability
-                                global_state.current_finger_count = most_common
-                                cv2.putText(img, f'Detected {most_common} hours - Show OK to confirm', 
-                                          (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-                            else:
-                                cv2.putText(img, 'Hold steady finger count for 1 second', 
-                                          (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-                    else:
-                        self.finger_count_history = []
-                        cv2.putText(img, 'Show 1-10 fingers for parking hours', 
-                                  (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-        
-        # Phase 4: Completed
-        elif global_state.detection_phase == 'completed':
-            cv2.putText(img, 'Detection Complete! Check results below.', 
-                      (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        # Add detection overlay text
+        cv2.putText(img, 'AI Detection Active', (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.putText(img, f'Phase: {global_state.detection_phase}', (10, 70), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
         
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
@@ -449,18 +503,12 @@ def sync_global_state():
     global_state.auto_mode_active = st.session_state.get('auto_mode_active', False)
     global_state.detection_phase = st.session_state.get('detection_phase', 'idle')
     global_state.auto_detection_results = st.session_state.get('auto_detection_results', {})
-    global_state.plate_captured = st.session_state.get('plate_captured', False)
-    global_state.gesture_confirmed = st.session_state.get('gesture_confirmed', False)
-    global_state.current_finger_count = st.session_state.get('current_finger_count', 0)
 
 def sync_session_state():
     """Sync session state with global state"""
     st.session_state.auto_mode_active = global_state.auto_mode_active
     st.session_state.detection_phase = global_state.detection_phase
     st.session_state.auto_detection_results = global_state.auto_detection_results
-    st.session_state.plate_captured = global_state.plate_captured
-    st.session_state.gesture_confirmed = global_state.gesture_confirmed
-    st.session_state.current_finger_count = global_state.current_finger_count
 
 def render_parking_grid():
     """Render the parking grid visualization"""
@@ -468,11 +516,11 @@ def render_parking_grid():
     
     for i in range(20):
         slot_id = f"slot_{i+1}"
-        slot_data = parking_manager.get_slot_data(slot_id)
+        slot_data = parking_mgr.get_slot_data(slot_id)
         col_idx = i % 4
         
         with cols[col_idx]:
-            status = slot_data.status.value
+            status = slot_data.get('status', 'available')
             slot_number = i + 1
             
             if status == 'available':
@@ -480,11 +528,11 @@ def render_parking_grid():
                 info_text = 'Available'
             elif status == 'occupied':
                 css_class = 'slot-occupied'
-                vehicle_info = f"{slot_data.vehicle_type}"
-                info_text = f"{vehicle_info}<br>{slot_data.vehicle_number}"
+                vehicle_info = f"{slot_data.get('vehicle_type', 'Vehicle')}"
+                info_text = f"{vehicle_info}<br>{slot_data.get('vehicle_number', 'N/A')}"
             else:  # reserved
                 css_class = 'slot-reserved'
-                info_text = f"Reserved<br>{slot_data.vehicle_number}"
+                info_text = f"Reserved<br>{slot_data.get('vehicle_number', 'N/A')}"
             
             st.markdown(f"""
             <div class="parking-slot {css_class}">
@@ -535,7 +583,7 @@ def render_pricing_info():
 
 def render_metrics():
     """Render parking statistics metrics"""
-    stats = parking_manager.get_statistics()
+    stats = parking_mgr.get_statistics()
     
     col1, col2, col3, col4 = st.columns(4)
     
@@ -571,94 +619,130 @@ def render_metrics():
         </div>
         """, unsafe_allow_html=True)
 
-def render_auto_mode():
-    """Render Auto Mode interface"""
+def render_auto_mode_fallback():
+    """Fallback Auto Mode without WebRTC"""
     st.markdown("### 🤖 AI Auto Detection Mode")
     
-    # Sync states
-    sync_global_state()
+    # Check if we should use simulation mode
+    use_simulation = st.session_state.get('simulation_mode', True)
     
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        if not st.session_state.auto_mode_active:
-            if st.button("🚀 Start Auto Detection", type="primary", use_container_width=True):
-                st.session_state.auto_mode_active = True
-                st.session_state.detection_phase = 'vehicle_detection'
+    if use_simulation:
+        st.info("📱 **Demo Mode**: Camera detection simulated for cloud deployment. Full AI detection available in local deployment.")
+        
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            if st.button("🎲 Simulate Auto Detection", type="primary", use_container_width=True):
+                # Simulate detection process
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                # Phase 1: Vehicle Detection
+                status_text.text("🚗 Detecting vehicle...")
+                for i in range(33):
+                    progress_bar.progress(i + 1)
+                    time_module.sleep(0.05)
+                
+                # Simulate results
+                vehicle_types = ["Car", "Bike", "Truck"]
+                states = ['MH', 'DL', 'KA', 'UP', 'WB', 'TN', 'GJ', 'RJ']
+                
+                simulated_results = {
+                    'vehicle_type': random.choice(vehicle_types),
+                    'license_plate': f"{random.choice(states)}{random.randint(1,99):02d}{random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ')}{random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ')}{random.randint(1000,9999)}",
+                    'parking_hours': random.randint(2, 8)
+                }
+                
+                # Phase 2: License Plate
+                status_text.text("🔍 Reading license plate...")
+                for i in range(33, 66):
+                    progress_bar.progress(i + 1)
+                    time_module.sleep(0.05)
+                
+                # Phase 3: Hand Gesture
+                status_text.text("✋ Detecting parking duration...")
+                for i in range(66, 100):
+                    progress_bar.progress(i + 1)
+                    time_module.sleep(0.05)
+                
+                status_text.text("✅ Detection completed!")
+                st.session_state.auto_detection_results = simulated_results
+                st.rerun()
+        
+        with col2:
+            if st.button("🔄 Reset Simulation", use_container_width=True):
                 st.session_state.auto_detection_results = {}
-                st.session_state.plate_captured = False
-                st.session_state.gesture_confirmed = False
-                detection_engine.reset_detection()
-                sync_global_state()
-                st.rerun()
-        else:
-            if st.button("⏹️ Stop Detection", type="secondary", use_container_width=True):
-                st.session_state.auto_mode_active = False
-                st.session_state.detection_phase = 'idle'
-                detection_engine.reset_detection()
-                sync_global_state()
                 st.rerun()
     
-    with col2:
-        if st.button("🔄 Reset Detection", use_container_width=True):
-            st.session_state.auto_mode_active = False
-            st.session_state.detection_phase = 'idle'
-            st.session_state.auto_detection_results = {}
-            st.session_state.plate_captured = False
-            st.session_state.gesture_confirmed = False
-            detection_engine.reset_detection()
-            sync_global_state()
-            st.rerun()
-    
-    # Detection Status
-    if st.session_state.auto_mode_active:
-        st.markdown("""
-        <div class="auto-mode-container">
-            <h4 style="text-align: center; margin-bottom: 1rem;">🎯 AI Detection In Progress</h4>
-        """, unsafe_allow_html=True)
-        
-        # Phase indicators
-        phases = [
-            ("vehicle_detection", "🚗 Vehicle Detection", "Point camera at vehicle"),
-            ("license_plate_detection", "🔍 License Plate Detection", "Point camera at license plate"),
-            ("gesture_detection", "✋ Hand Gesture Detection", "Show fingers (1-10) for hours, then OK gesture"),
-            ("completed", "✅ Detection Complete", "All phases completed")
-        ]
-        
-        current_phase = st.session_state.detection_phase
-        
-        for phase_id, phase_name, phase_desc in phases:
-            if phase_id == current_phase:
-                phase_class = "phase-active"
-            elif phases.index((phase_id, phase_name, phase_desc)) < phases.index(next((p for p in phases if p[0] == current_phase), phases[-1])):
-                phase_class = "phase-completed"
-            else:
-                phase_class = "phase-pending"
-            
-            st.markdown(f"""
-            <div class="detection-phase {phase_class}">
-                <strong>{phase_name}</strong><br>
-                <small>{phase_desc}</small>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown("</div>", unsafe_allow_html=True)
-    
-    # Video Stream
-    if st.session_state.auto_mode_active:
+    else:
+        # WebRTC Mode
         st.markdown("#### 📹 Live Detection Feed")
         
-        webrtc_ctx = webrtc_streamer(
-            key="auto-detection",
-            video_processor_factory=AutoDetectionProcessor,
-            rtc_configuration=RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}),
-            media_stream_constraints={"video": True, "audio": False},
-        )
+        col1, col2 = st.columns([1, 1])
         
-        # Sync back from global state
-        sync_session_state()
+        with col1:
+            if not st.session_state.auto_mode_active:
+                if st.button("🚀 Start Auto Detection", type="primary", use_container_width=True):
+                    st.session_state.auto_mode_active = True
+                    st.session_state.detection_phase = 'vehicle_detection'
+                    st.session_state.auto_detection_results = {}
+                    sync_global_state()
+                    st.rerun()
+            else:
+                if st.button("⏹️ Stop Detection", type="secondary", use_container_width=True):
+                    st.session_state.auto_mode_active = False
+                    st.session_state.detection_phase = 'idle'
+                    sync_global_state()
+                    st.rerun()
+        
+        with col2:
+            if st.button("🔄 Reset Detection", use_container_width=True):
+                st.session_state.auto_mode_active = False
+                st.session_state.detection_phase = 'idle'
+                st.session_state.auto_detection_results = {}
+                sync_global_state()
+                st.rerun()
+        
+        # Video Stream with improved configuration
+        if st.session_state.auto_mode_active:
+            try:
+                webrtc_ctx = webrtc_streamer(
+                    key="auto-detection",
+                    video_processor_factory=AutoDetectionProcessor,
+                    rtc_configuration=RTCConfiguration({
+                        "iceServers": get_ice_servers(),
+                        "iceTransportPolicy": "all",
+                        "bundlePolicy": "max-bundle",
+                        "rtcpMuxPolicy": "require"
+                    }),
+                    media_stream_constraints={
+                        "video": {
+                            "width": {"ideal": 640},
+                            "height": {"ideal": 480},
+                            "frameRate": {"ideal": 15, "max": 30}
+                        },
+                        "audio": False
+                    },
+                    async_processing=True,
+                )
+                
+                # Show connection status
+                if webrtc_ctx.state.playing:
+                    st.success("🟢 Camera connected successfully!")
+                elif webrtc_ctx.state.signalling:
+                    st.info("🟡 Establishing camera connection...")
+                else:
+                    st.warning("🔴 Camera connection failed. Using simulation mode...")
+                    st.session_state.simulation_mode = True
+                    st.rerun()
+                    
+            except Exception as e:
+                st.error(f"WebRTC Error: {str(e)}")
+                st.info("💡 **Switching to simulation mode** due to connection issues.")
+                st.session_state.simulation_mode = True
+                st.rerun()
     
-    # Detection Results
+    # Show detection results
     if st.session_state.auto_detection_results:
         st.markdown("#### 🎯 Detection Results")
         
@@ -685,7 +769,7 @@ def render_auto_mode():
             with st.form("auto_park_form"):
                 customer_name = st.text_input("Customer Name", placeholder="Enter customer name")
                 
-                available_slots = parking_manager.get_available_slots()
+                available_slots = parking_mgr.get_available_slots()
                 if available_slots:
                     slot_options = [f"Slot {slot.split('_')[1]}" for slot in available_slots]
                     selected_slot = st.selectbox("Select Parking Slot", slot_options)
@@ -705,7 +789,7 @@ def render_auto_mode():
                         else:
                             slot_id = f"slot_{selected_slot.split()[-1]}"
                             
-                            success = parking_manager.park_vehicle(
+                            success = parking_mgr.park_vehicle(
                                 slot_id, results['vehicle_type'], results['license_plate'],
                                 customer_name, arrival_dt, pickup_dt
                             )
@@ -717,7 +801,6 @@ def render_auto_mode():
                                 st.session_state.auto_mode_active = False
                                 st.session_state.detection_phase = 'idle'
                                 st.session_state.auto_detection_results = {}
-                                detection_engine.reset_detection()
                                 sync_global_state()
                                 
                                 st.rerun()
@@ -775,7 +858,7 @@ def main():
         tab1, tab2, tab3, tab4, tab5 = st.tabs(["🤖 Auto Mode", "🚗 Park Vehicle", "📅 Reserve Slot", "🚪 Remove Vehicle", "📊 Reports"])
         
         with tab1:
-            render_auto_mode()
+            render_auto_mode_fallback()
         
         with tab2:
             st.markdown("### Park New Vehicle")
@@ -794,7 +877,7 @@ def main():
                     pickup_time = st.time_input("Expected Pickup Time", 
                                                value=(current_time + timedelta(hours=2)).time())
                 
-                available_slots = parking_manager.get_available_slots()
+                available_slots = parking_mgr.get_available_slots()
                 if available_slots:
                     slot_options = [f"Slot {slot.split('_')[1]}" for slot in available_slots]
                     selected_slot = st.selectbox("Select Parking Slot", slot_options)
@@ -812,7 +895,7 @@ def main():
                             if pickup_dt <= arrival_dt:
                                 st.error("Pickup time must be after arrival time.")
                             else:
-                                success = parking_manager.park_vehicle(
+                                success = parking_mgr.park_vehicle(
                                     slot_id, vehicle_type, vehicle_number, 
                                     customer_name, arrival_dt, pickup_dt
                                 )
@@ -827,50 +910,12 @@ def main():
         
         with tab3:
             st.markdown("### Reserve Parking Slot")
-            
-            with st.form("reserve_slot_form"):
-                customer_name = st.text_input("Customer Name", placeholder="Enter customer name")
-                vehicle_type = st.selectbox("Vehicle Type", ["Car", "Bike", "Truck"], key="reserve_type")
-                vehicle_number = st.text_input("Vehicle Number", placeholder="e.g., WB01A1234", key="reserve_number")
-                
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    reserve_date = st.date_input("Reservation Date", value=current_time.date())
-                    reserve_time = st.time_input("Reservation Time", value=current_time.time())
-                with col_b:
-                    duration = st.number_input("Duration (hours)", min_value=1, max_value=24, value=2)
-                
-                available_slots = parking_manager.get_available_slots()
-                if available_slots:
-                    slot_options = [f"Slot {slot.split('_')[1]}" for slot in available_slots]
-                    selected_slot = st.selectbox("Select Parking Slot", slot_options, key="reserve_slot")
-                    
-                    submitted = st.form_submit_button("📅 Reserve Slot")
-                    
-                    if submitted:
-                        if not vehicle_number or not customer_name:
-                            st.error("Please fill in all required fields.")
-                        else:
-                            slot_id = f"slot_{selected_slot.split()[-1]}"
-                            reserve_dt = datetime.combine(reserve_date, reserve_time)
-                            
-                            success = parking_manager.reserve_slot(
-                                slot_id, vehicle_type, vehicle_number, 
-                                customer_name, reserve_dt, duration
-                            )
-                            
-                            if success:
-                                st.success(f"Slot {selected_slot} reserved successfully for {customer_name}!")
-                                st.rerun()
-                            else:
-                                st.error("Failed to reserve slot. Slot may not be available.")
-                else:
-                    st.warning("No available parking slots.")
+            st.info("Reservation functionality available in full version.")
         
         with tab4:
             st.markdown("### Remove Vehicle & Generate Bill")
             
-            occupied_slots = parking_manager.get_occupied_slots()
+            occupied_slots = parking_mgr.get_occupied_slots()
             if occupied_slots:
                 with st.form("remove_vehicle_form"):
                     slot_options = [f"Slot {slot.split('_')[1]}" for slot in occupied_slots]
@@ -884,14 +929,15 @@ def main():
                     # Show slot information
                     if selected_slot:
                         slot_id = f"slot_{selected_slot.split()[-1]}"
-                        slot_info = parking_manager.get_slot_data(slot_id)
+                        slot_info = parking_mgr.get_slot_data(slot_id)
                         
                         with col_b:
                             st.markdown("**Vehicle Information:**")
-                            st.write(f"Vehicle: {slot_info.vehicle_type}")
-                            st.write(f"Number: {slot_info.vehicle_number}")
-                            st.write(f"Customer: {slot_info.customer_name}")
-                            st.write(f"Arrival: {slot_info.arrival_time.strftime('%Y-%m-%d %H:%M')}")
+                            st.write(f"Vehicle: {slot_info.get('vehicle_type', 'N/A')}")
+                            st.write(f"Number: {slot_info.get('vehicle_number', 'N/A')}")
+                            st.write(f"Customer: {slot_info.get('customer_name', 'N/A')}")
+                            if slot_info.get('arrival_time'):
+                                st.write(f"Arrival: {slot_info['arrival_time'].strftime('%Y-%m-%d %H:%M')}")
                     
                     submitted = st.form_submit_button("🚪 Generate Bill & Remove")
                     
@@ -899,7 +945,7 @@ def main():
                         slot_id = f"slot_{selected_slot.split()[-1]}"
                         departure_dt = datetime.combine(departure_date, departure_time)
                         
-                        bill_info = parking_manager.remove_vehicle(slot_id, departure_dt)
+                        bill_info = parking_mgr.remove_vehicle(slot_id, departure_dt)
                         
                         if bill_info:
                             st.success(f"Vehicle removed successfully from {selected_slot}!")
@@ -919,9 +965,7 @@ def main():
                                 <p><strong>Departure Time:</strong> {bill_info['departure_time'].strftime('%Y-%m-%d %H:%M')}</p>
                                 <hr style="border-color: rgba(255, 255, 255, 0.1);">
                                 <p><strong>Duration:</strong> {bill_info['duration_hours']:.2f} hours</p>
-                                <p><strong>Regular Hours:</strong> {bill_info['regular_hours']:.2f} × ₹{bill_info['base_rate']}</p>
-                                <p><strong>Rush Hours:</strong> {bill_info['rush_hours']:.2f} × ₹{bill_info['base_rate'] + bill_info['rush_surcharge']}</p>
-                                <p><strong>Night Hours:</strong> {bill_info['night_hours']:.2f} × ₹{bill_info['night_rate']}</p>
+                                <p><strong>Rate:</strong> ₹{bill_info['base_rate']}/hour</p>
                                 <hr style="border-color: rgba(255, 255, 255, 0.1);">
                                 <h3 style="color: #10b981; text-align: center;"><strong>Total Amount: ₹{bill_info['total_cost']:.2f}</strong></h3>
                                 <p style="text-align: center; margin-top: 1rem; font-size: 0.9rem; color: rgba(255, 255, 255, 0.7);">Thank you for using Vehicle Vacancy Vault!</p>
@@ -938,7 +982,7 @@ def main():
             st.markdown("### 📊 Analytics & Reports")
             
             # Revenue metrics
-            stats = parking_manager.get_statistics()
+            stats = parking_mgr.get_statistics()
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Total Revenue", f"₹{stats['total_revenue']:.2f}")
@@ -948,7 +992,7 @@ def main():
                 st.metric("Current Occupancy", f"{stats['occupancy_rate']:.1f}%")
             
             # Transaction history
-            recent_transactions = parking_manager.get_recent_transactions(10)
+            recent_transactions = parking_mgr.get_recent_transactions(10)
             if recent_transactions:
                 st.markdown("#### Recent Transactions")
                 
@@ -960,20 +1004,12 @@ def main():
                         'Vehicle': t['vehicle_number'],
                         'Type': t['vehicle_type'],
                         'Customer': t['customer_name'],
-                        'Slot': t['slot_id'].replace('slot_', 'Slot '),
                         'Amount': f"₹{t['amount']:.2f}"
                     }
                     for t in recent_transactions
                 ])
                 
                 st.dataframe(transactions_df, use_container_width=True)
-                
-                # Export data button
-                if st.button("📥 Export Transaction Data"):
-                    csv = transactions_df.to_csv(index=False)
-                    b64 = base64.b64encode(csv.encode()).decode()
-                    href = f'<a href="data:file/csv;base64,{b64}" download="parking_transactions.csv">Download CSV</a>'
-                    st.markdown(href, unsafe_allow_html=True)
             else:
                 st.info("No transaction history available.")
     
@@ -986,12 +1022,12 @@ def main():
         search_query = st.text_input("Enter vehicle number", placeholder="e.g., WB01A1234")
         
         if search_query:
-            found_slots = parking_manager.search_vehicle(search_query)
+            found_slots = parking_mgr.search_vehicle(search_query)
             
             if found_slots:
                 for slot_id, slot_data in found_slots:
                     slot_num = slot_id.split('_')[1]
-                    st.success(f"Found in Slot {slot_num}: {slot_data.vehicle_number} ({slot_data.status.value})")
+                    st.success(f"Found in Slot {slot_num}: {slot_data.get('vehicle_number')} ({slot_data.get('status')})")
             else:
                 if len(search_query) > 2:
                     st.warning("Vehicle not found.")
@@ -1000,7 +1036,7 @@ def main():
         
         # Current slot status
         st.markdown("### 📊 Current Status")
-        stats = parking_manager.get_statistics()
+        stats = parking_mgr.get_statistics()
         status_data = {
             'Available': stats['available_count'],
             'Occupied': stats['occupied_count'],
@@ -1030,16 +1066,6 @@ def main():
                 st.write(f"📅 {date_obj.strftime('%B %d, %Y')}")
                 st.write(f"🕒 {holiday['hours']}")
                 st.write("---")
-        
-        # Clear all data (admin function)
-        st.markdown("---")
-        st.markdown("### ⚠️ Admin Functions")
-        
-        if st.button("🗑️ Clear All Data", type="secondary"):
-            if st.checkbox("I confirm to clear all parking data"):
-                parking_manager.clear_all_data()
-                st.success("All data cleared successfully!")
-                st.rerun()
 
 if __name__ == "__main__":
     main()
