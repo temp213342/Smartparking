@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vehicle Vacancy Vault - Smart Parking System</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body data-theme="dark">
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-content">
+            <div class="nav-left">
+                <div class="logo">
+                    <i class="fas fa-car"></i>
+                    <span>Vehicle Vacancy Vault</span>
+                </div>
+                <button class="theme-toggle" onclick="toggleTheme()">
+                    <i class="fas fa-moon" id="theme-icon"></i>
+                    <span id="theme-text">Dark Mode</span>
+                </button>
+            </div>
+            <div class="nav-stats">
+                <div class="stat-item">
+                    <div class="stat-number" id="totalSlots">20</div>
+                    <div class="stat-label">Total Slots</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="occupiedSlots">0</div>
+                    <div class="stat-label">Occupied</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="availableSlots">20</div>
+                    <div class="stat-label">Available</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="reservedSlots">0</div>
+                    <div class="stat-label">Reserved</div>
+                </div>
+                <div id="currentClock"></div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>Smart Parking Management</h1>
+            <p>Intelligent vehicle parking with pricing optimization</p>
+            <button class="holiday-calendar-btn" onclick="showHolidayCalendar()">
+                <i class="fas fa-calendar"></i>
+                Holiday Rush Hours (2025)
+            </button>
+        </div>
+
+        <!-- Pricing Information -->
+        <div class="pricing-info glass-card">
+            <h3><i class="fas fa-info-circle"></i> Pricing Information</h3>
+            <div class="pricing-grid">
+                <div class="price-card">
+                    <h3>Bikes</h3>
+                    <p>₹200/hour</p>
+                    <small>+₹50 rush hour surcharge</small>
+                </div>
+                <div class="price-card">
+                    <h3>Cars</h3>
+                    <p>₹150/hour</p>
+                    <small>+₹30 rush hour surcharge</small>
+                </div>
+                <div class="price-card">
+                    <h3>Trucks</h3>
+                    <p>₹300/hour</p>
+                    <small>+₹70 rush hour surcharge</small>
+                </div>
+                <div class="price-card">
+                    <h3>Night Hours</h3>
+                    <p>₹100/hour</p>
+                    <small>11 PM - 5 AM (All vehicles)</small>
+                </div>
+            </div>
+            <p style="text-align: center; margin-top: 1rem; font-size: 0.9rem; opacity: 0.8;">
+                <strong>Rush hours:</strong> Fridays 5PM-12AM, Weekends 11AM-12AM, Holidays as scheduled
+            </p>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Parking Grid -->
+            <div class="parking-grid-section glass-card">
+                <h2 class="section-title">
+                    <i class="fas fa-th-large"></i>
+                    Parking Layout
+                </h2>
+                <div class="parking-grid" id="parkingGrid">
+                    <!-- Slots will be generated dynamically -->
+                </div>
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: linear-gradient(135deg, var(--accent-green), #059669);"></div>
+                        <span>Available</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: linear-gradient(135deg, var(--accent-red), #dc2626);"></div>
+                        <span>Occupied</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: linear-gradient(135deg, var(--accent-orange), #d97706);"></div>
+                        <span>Reserved</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Controls Panel -->
+            <div class="controls-panel glass-card">
+                <h2 class="section-title">
+                    <i class="fas fa-cog"></i>
+                    Vehicle Management
+                </h2>
+                
+                <!-- AI Auto Mode Button -->
+                <div class="action-buttons" style="margin-bottom: 2rem;">
+                    <button class="btn btn-secondary" onclick="showAutoModeModal()">
+                        <i class="fas fa-robot"></i>
+                        Auto Mode (AI Detection)
+                    </button>
+                </div>
+                
+                <!-- Manual Mode Form -->
+                <div class="form-group">
+                    <label>Vehicle Type</label>
+                    <select id="vehicleType">
+                        <option value="Car">Car</option>
+                        <option value="Bike">Bike</option>
+                        <option value="Truck">Truck</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Vehicle Number</label>
+                    <input type="text" id="vehicleNumber" placeholder="e.g., WB01A1234" maxlength="15">
+                </div>
+
+                <div class="form-group">
+                    <label>Arrival Date</label>
+                    <input type="date" id="arrivalDate">
+                </div>
+
+                <div class="form-group">
+                    <label>Arrival Time</label>
+                    <input type="time" id="arrivalTime">
+                </div>
+
+                <div class="form-group">
+                    <label>Expected Pickup Date</label>
+                    <input type="date" id="pickupDate">
+                </div>
+
+                <div class="form-group">
+                    <label>Expected Pickup Time</label>
+                    <input type="time" id="pickupTime">
+                </div>
+
+                <div class="action-buttons">
+                    <button class="btn btn-primary" onclick="parkVehicle()">
+                        <i class="fas fa-car"></i>
+                        Park Vehicle (Ctrl+P)
+                    </button>
+                    <button class="btn btn-warning" onclick="showReserveModal()">
+                        <i class="fas fa-bookmark"></i>
+                        Reserve Slot
+                    </button>
+                    <button class="btn btn-danger" onclick="showRemoveModal()">
+                        <i class="fas fa-sign-out-alt"></i>
+                        Remove Vehicle (Ctrl+R)
+                    </button>
+                </div>
+
+                <!-- Advanced Controls -->
+                <div class="action-buttons" style="margin-top: 2rem;">
+                    <button class="btn btn-secondary" onclick="searchVehicle()">
+                        <i class="fas fa-search"></i>
+                        Search Vehicle (Ctrl+F)
+                    </button>
+                    <button class="btn btn-secondary" onclick="generateReport()">
+                        <i class="fas fa-chart-bar"></i>
+                        Generate Report (Ctrl+G)
+                    </button>
+                    <button class="btn btn-secondary" onclick="exportData()">
+                        <i class="fas fa-download"></i>
+                        Export Data (Ctrl+E)
+                    </button>
+                    <button class="btn btn-secondary" onclick="importData()">
+                        <i class="fas fa-upload"></i>
+                        Import Data
+                    </button>
+                    <button class="btn btn-danger" onclick="clearAllData()">
+                        <i class="fas fa-trash"></i>
+                        Clear All Data
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auto Mode Modal -->
+    <div class="modal" id="autoModeModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2><i class="fas fa-robot"></i> AI Auto Detection Mode</h2>
+                <button class="close-btn" onclick="closeModal('autoModeModal')">&times;</button>
+            </div>
+            <div class="auto-mode-status">
+                <h3>Automated Vehicle Detection</h3>
+                <p>This mode uses AI to automatically detect:</p>
+                <ul>
+                    <li><strong>Vehicle Type:</strong> Cars, Bikes, Trucks/Buses</li>
+                    <li><strong>License Plate:</strong> OCR recognition for Indian plates</li>
+                    <li><strong>Parking Duration:</strong> Hand gesture recognition (1-10 hours)</li>
+                </ul>
+                
+                <div id="detectionStatus">
+                    <p>Ready to start AI detection</p>
+                </div>
+                
+                <div id="detectionResults">
+                    <!-- Results will be shown here -->
+                </div>
+                
+                <div class="auto-mode-buttons">
+                    <button class="btn btn-primary" onclick="startAutoDetection()">
+                        <i class="fas fa-play"></i>
+                        Start Auto Detection
+                    </button>
+                    <button class="btn btn-secondary" onclick="resetDetection()">
+                        <i class="fas fa-refresh"></i>
+                        Reset Detection
+                    </button>
+                    <button class="btn btn-warning" onclick="useDetectionResults()">
+                        <i class="fas fa-check"></i>
+                        Use Results & Park
+                    </button>
+                </div>
+                
+                <div style="margin-top: 2rem; padding: 1rem; background: var(--bg-glass); border-radius: 8px; border: 1px solid var(--border-primary);">
+                    <h4 style="color: var(--accent-primary); margin-bottom: 1rem; font-size: 1rem;">Quick Tips:</h4>
+                    <ul style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6; margin: 0; padding-left: 1.2rem;">
+                        <li>Ensure good lighting for better detection accuracy</li>
+                        <li>Hold camera steady during each detection phase</li>
+                        <li>For license plates, ensure clear visibility of all characters</li>
+                        <li>For hand gestures, show fingers clearly against a contrasting background</li>
+                        <li>Press <kbd style="background: var(--bg-card); padding: 2px 6px; border-radius: 4px; font-size: 0.75rem;">Ctrl+A</kbd> to quickly open Auto Mode</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reserve Slot Modal -->
+    <div class="modal" id="reserveModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Reserve Parking Slot</h2>
+                <button class="close-btn" onclick="closeModal('reserveModal')">&times;</button>
+            </div>
+            <div class="form-group">
+                <label>Customer Name</label>
+                <input type="text" id="reserveCustomerName" placeholder="Enter customer name">
+            </div>
+            <div class="form-group">
+                <label>Vehicle Type</label>
+                <select id="reserveVehicleType">
+                    <option value="Car">Car</option>
+                    <option value="Bike">Bike</option>
+                    <option value="Truck">Truck</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Vehicle Number</label>
+                <input type="text" id="reserveVehicleNumber" placeholder="e.g., WB01A1234">
+            </div>
+            <div class="form-group">
+                <label>Reservation Date</label>
+                <input type="date" id="reserveDate">
+            </div>
+            <div class="form-group">
+                <label>Reservation Time</label>
+                <input type="time" id="reserveTime">
+            </div>
+            <div class="form-group">
+                <label>Duration (hours)</label>
+                <input type="number" id="reserveDuration" min="1" max="24" value="2">
+            </div>
+            <button class="btn btn-warning" onclick="reserveSlot()">
+                <i class="fas fa-bookmark"></i>
+                Reserve Slot
+            </button>
+        </div>
+    </div>
+
+    <!-- Remove Vehicle Modal -->
+    <div class="modal" id="removeModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Remove Vehicle</h2>
+                <button class="close-btn" onclick="closeModal('removeModal')">&times;</button>
+            </div>
+            <div class="form-group">
+                <label>Slot Number</label>
+                <select id="removeSlotSelect">
+                    <option value="">Select a slot</option>
+                </select>
+            </div>
+            <div id="selectedSlotInfo"></div>
+            <div class="form-group">
+                <label>Current Date</label>
+                <input type="date" id="currentDate">
+            </div>
+            <div class="form-group">
+                <label>Current Time</label>
+                <input type="time" id="currentTime">
+            </div>
+            <button class="btn btn-danger" onclick="removeVehicle()">
+                <i class="fas fa-sign-out-alt"></i>
+                Generate Bill & Remove
+            </button>
+        </div>
+    </div>
+
+    <!-- Bill Modal -->
+    <div class="modal" id="billModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Parking Bill</h2>
+                <button class="close-btn" onclick="closeModal('billModal')">&times;</button>
+            </div>
+            <div class="bill" id="billContent">
+                <!-- Bill content will be generated dynamically -->
+            </div>
+            <button class="btn btn-print" onclick="printBill()">
+                <i class="fas fa-print"></i>
+                Print Bill
+            </button>
+        </div>
+    </div>
+
+    <!-- Holiday Calendar Modal -->
+    <div class="modal" id="holidayModal">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <h2><i class="fas fa-calendar"></i> Holiday Rush Hours Calendar 2025</h2>
+                <button class="close-btn" onclick="closeModal('holidayModal')">&times;</button>
+            </div>
+            <div class="holiday-calendar">
+                <div class="holiday-section">
+                    <table class="holiday-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Holiday</th>
+                                <th>Rush Hours</th>
+                            </tr>
+                        </thead>
+                        <tbody id="holidayTableBody">
+                            <!-- Holiday data will be populated here -->
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="holiday-section">
+                    <h3>Regular Rush Hours:</h3>
+                    <div class="regular-hours">
+                        <ul>
+                            <li><strong>Fridays:</strong> 5:00 PM - 12:00 AM</li>
+                            <li><strong>Weekends (Saturday & Sunday):</strong> 11:00 AM - 12:00 AM</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div class="holiday-section">
+                    <h3>Night Hours (Special Rate):</h3>
+                    <div class="regular-hours">
+                        <ul>
+                            <li><strong>Time:</strong> 11:00 PM to 5:00 AM</li>
+                            <li><strong>Rate:</strong> ₹100/hour for all vehicles</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Report Modal -->
+    <div class="modal report-modal" id="reportModal">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <h2><i class="fas fa-chart-bar"></i> Parking Analytics Report</h2>
+                <button class="close-btn" onclick="closeModal('reportModal')">&times;</button>
+            </div>
+            <div id="reportContent">
+                <!-- Report content will be generated dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification -->
+    <div class="notification" id="notification"></div>
+
+    <script src="script.js"></script>
+</body>
+</html>
