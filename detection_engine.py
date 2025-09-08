@@ -54,6 +54,18 @@ class DetectionEngine:
         self.ocr_api_key = "K83315680088957"
         self.ocr_api_url = "https://api.ocr.space/parse/image"
         
+        # Hand gesture timing variables
+        self.previous_counts = []
+        self.current_finger_number = 0
+        self.finger_number_start_time = None
+        self.finger_display_duration = 3.0  # 3 seconds for finger count stability
+        self.confirmation_mode = False
+        self.confirmed_finger_number = 0
+        self.ok_gesture_counter = 0
+        self.ok_gesture_threshold = 8  # Need consecutive OK detections
+        self.ok_confirmation_duration = 2.0  # 2 seconds for OK gesture confirmation
+        self.last_stable_finger_count = 0
+        
         self._initialize_models()
     
     def _initialize_models(self):
@@ -107,7 +119,7 @@ class DetectionEngine:
                         conf = float(box.conf[0])
                         class_name = self.vehicle_model.names[cls]
                         
-                        if conf > 0.25 and class_name in self.vehicle_classes_mapping:
+                        if conf > 0.15 and class_name in self.vehicle_classes_mapping:
                             if conf > best_confidence:
                                 best_confidence = conf
                                 best_vehicle_type = self.vehicle_classes_mapping[class_name]
@@ -293,6 +305,17 @@ class DetectionEngine:
         
         return score
     
+    def smooth_detection(self, current_count: int, threshold: int = 3) -> int:
+        """Smooth detection to reduce noise"""
+        self.previous_counts.append(current_count)
+        if len(self.previous_counts) > 5:
+            self.previous_counts.pop(0)
+        
+        # Return most common count in recent frames
+        if len(self.previous_counts) >= threshold:
+            return max(set(self.previous_counts), key=self.previous_counts.count)
+        return current_count
+
     def count_fingers(self, hand_landmarks, hand_label: str) -> int:
         """Count fingers from hand landmarks"""
         if not hand_landmarks:
@@ -345,7 +368,7 @@ class DetectionEngine:
         return circle_formed and middle_extended and ring_extended and pinky_extended
     
     def detect_hand_gesture_in_frame(self, frame: np.ndarray) -> Tuple[int, bool, np.ndarray]:
-        """Detect hand gestures in frame"""
+        """Detect hand gestures in frame with timing confirmation"""
         if self.hands is None:
             return 0, False, frame
         
@@ -355,6 +378,7 @@ class DetectionEngine:
             
             total_fingers = 0
             ok_detected = False
+            current_time = time.time()
             
             if results.multi_hand_landmarks and results.multi_handedness:
                 for hand_landmarks, hand_handedness in zip(results.multi_hand_landmarks, results.multi_handedness):
@@ -368,26 +392,101 @@ class DetectionEngine:
                         self.mp_draw.DrawingSpec(color=(255, 0, 0), thickness=2)
                     )
                     
-                    # Check for OK sign
-                    if self.is_ok_sign(hand_landmarks, hand_label):
-                        ok_detected = True
-                        cv2.putText(frame, 'OK DETECTED!', (10, 60), 
-                                  cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                    else:
-                        # Count fingers
-                        fingers = self.count_fingers(hand_landmarks, hand_label)
-                        total_fingers += fingers
-                    
                     # Display hand info
                     cv2.putText(frame, f'{hand_label} ({confidence:.2f})', 
                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    
+                    # Check for OK sign
+                    if self.is_ok_sign(hand_landmarks, hand_label):
+                        ok_detected = True
+                    
+                    # Count fingers only if not in confirmation mode
+                    if not self.confirmation_mode:
+                        fingers = self.count_fingers(hand_landmarks, hand_label)
+                        total_fingers += fingers
             
-            # Limit fingers to 1-10
+            # Handle OK gesture detection with timing
+            if ok_detected and self.confirmation_mode:
+                self.ok_gesture_counter += 1
+                remaining = max(0, self.ok_gesture_threshold - self.ok_gesture_counter)
+                
+                cv2.putText(frame, 'OK SIGN DETECTED!', (50, 200), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 3)
+                cv2.putText(frame, f'Confirming... {remaining} more frames', (50, 240), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2)
+                
+                # Confirmed after threshold consecutive detections
+                if self.ok_gesture_counter >= self.ok_gesture_threshold:
+                    logger.info(f'Hand gesture confirmed: {self.confirmed_finger_number} fingers')
+                    self.detection_result.parking_hours = self.confirmed_finger_number
+                    self.detection_result.message = f"Confirmed {self.confirmed_finger_number} parking hours"
+                    self.detection_result.status = "confirmed"
+                    
+                    # Reset timing variables
+                    self._reset_gesture_timing()
+                    
+                    return self.confirmed_finger_number, True, frame
+            else:
+                self.ok_gesture_counter = 0
+            
+            # Finger counting and timing logic
+            if not self.confirmation_mode and results.multi_hand_landmarks:
+                # Smooth the finger count
+                smoothed_fingers = self.smooth_detection(total_fingers)
+                
+                # Check if finger number has changed
+                if smoothed_fingers != self.current_finger_number:
+                    self.current_finger_number = smoothed_fingers
+                    self.finger_number_start_time = current_time
+                    logger.info(f"New finger count detected: {smoothed_fingers}")
+                
+                # Check if same number has been displayed for required duration
+                if (self.finger_number_start_time and 
+                    (current_time - self.finger_number_start_time) >= self.finger_display_duration):
+                    
+                    self.confirmation_mode = True
+                    self.confirmed_finger_number = self.current_finger_number
+                    self.detection_result.message = f"Number {self.confirmed_finger_number} detected for {self.finger_display_duration}s. Show OK gesture to confirm."
+                    self.detection_result.status = "awaiting_confirmation"
+                    logger.info(f"Number {self.confirmed_finger_number} stable for {self.finger_display_duration}s, entering confirmation mode")
+                
+                # Display current finger count and timing info
+                self.last_stable_finger_count = smoothed_fingers
+                cv2.putText(frame, f'Fingers: {smoothed_fingers}', (50, 100), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 4)
+                
+                # Show stability progress
+                if self.finger_number_start_time:
+                    elapsed = current_time - self.finger_number_start_time
+                    remaining_time = max(0, self.finger_display_duration - elapsed)
+                    progress_text = f'Stable for {elapsed:.1f}s / {self.finger_display_duration}s'
+                    cv2.putText(frame, progress_text, (50, 140), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 2)
+                    
+                    if remaining_time > 0:
+                        cv2.putText(frame, f'Hold for {remaining_time:.1f}s more', (50, 170), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 100, 0), 2)
+            
+            elif self.confirmation_mode:
+                # Display confirmation message
+                cv2.putText(frame, f'Confirm {self.confirmed_finger_number} hours?', (50, 100), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 4)
+                cv2.putText(frame, 'Show OK gesture to confirm', (50, 150), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (128, 0, 128), 3)
+                
+                # Auto-reset if no hands detected for too long in confirmation mode
+                if not results.multi_hand_landmarks:
+                    # Could add timeout logic here if needed
+                    pass
+            
+            elif not results.multi_hand_landmarks:
+                cv2.putText(frame, 'Show your hand(s)', (50, 100), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 128), 3)
+                # Reset timing if no hands detected
+                self._reset_gesture_timing()
+            
+            # Limit fingers to 0-10
             total_fingers = min(10, max(0, total_fingers))
-            
-            if not ok_detected and total_fingers > 0:
-                cv2.putText(frame, f'Fingers: {total_fingers}', (10, 100), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 255), 3)
             
             return total_fingers, ok_detected, frame
             
@@ -395,10 +494,33 @@ class DetectionEngine:
             logger.error(f"Hand gesture detection error: {e}")
             return 0, False, frame
     
+    def _reset_gesture_timing(self):
+        """Reset all gesture timing variables"""
+        self.current_finger_number = 0
+        self.finger_number_start_time = None
+        self.confirmation_mode = False
+        self.confirmed_finger_number = 0
+        self.ok_gesture_counter = 0
+        self.previous_counts = []
+    
     def reset_detection(self):
-        """Reset detection state"""
+        """Reset detection state including gesture timing"""
         self.detection_result = DetectionResult()
-        logger.info("Detection state reset")
+        self._reset_gesture_timing()
+        logger.info("Detection state and gesture timing reset")
+    
+    def get_gesture_status(self) -> Dict:
+        """Get current gesture detection status"""
+        return {
+            'current_finger_count': self.current_finger_number,
+            'confirmed_finger_count': self.confirmed_finger_number,
+            'confirmation_mode': self.confirmation_mode,
+            'ok_gesture_counter': self.ok_gesture_counter,
+            'time_remaining': max(0, self.finger_display_duration - 
+                                (time.time() - self.finger_number_start_time)) 
+                                if self.finger_number_start_time else 0,
+            'last_stable_count': self.last_stable_finger_count
+        }
     
     def get_status(self) -> Dict:
         """Get current detection status"""
